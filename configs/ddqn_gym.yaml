@@ -1,0 +1,32 @@
+
+seed : 1
+
+env : 
+  num_envs : 16
+  num_eval : 4
+  env_engine : 'gym'
+  name : CartPole-v1
+  eval_every : 200
+
+train :
+  start_training_after_x_steps : 0
+  total_train_step : 20_000
+  max_replay_size : 5_000
+  batch_size : 128
+  target_period : 50
+  discount : 0.99
+  learning_rate : 0.002
+
+  hidden_layers : [64,64]
+
+  epsilon_cfg:
+    init_value : 0.5
+    end_value : 0.001
+    transition_steps : 10_000
+    power : 1.0
+
+log:
+  wandb_mode : disabled
+  wandb_group : DDQN_GYM_4
+
+
