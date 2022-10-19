@@ -5,15 +5,14 @@ import jax
 from jax.flatten_util import ravel_pytree
 
 
+class DoubleQLogger:
+    def __init__(self, mode, group, wandb_cfg) -> None:
 
-class ddqn_logger:
-    def __init__(self, config) -> None:
-
-        mode = config["log"]["wandb_mode"]
-        group = config["log"]["wandb_group"]
+        mode = mode
+        group = group
         wandb.init(
             project="Rl-benchmark",
-            config=config,
+            config=wandb_cfg,
             entity="oserris",
             mode=mode,
             group=group,
@@ -24,8 +23,9 @@ class ddqn_logger:
         observable.on("on_learn_step", self.on_learn_step)
         observable.on("on_evaluation", self.on_evaluation)
 
-    def action_selection(self, step, action, epsilon, **kwargs):
-        wandb.log({"explore/epsilon": epsilon}, step=step)
+    def action_selection(self, step, actions = None, epsilon=None, **kwargs):
+        if epsilon:
+            wandb.log({"explore/epsilon": epsilon}, step=step)
 
     def on_learn_step(self, step, loss, grads, **kwargs):
         flattened_grads, _ = ravel_pytree(grads)

@@ -9,24 +9,25 @@ env :
   eval_every : 200
 
 train :
-  start_training_after_x_steps : 0
+  start_training_after_x_steps : 1000
   total_train_step : 20_000
   max_replay_size : 5_000
   batch_size : 128
-  target_period : 50
-  discount : 0.99
-  learning_rate : 0.002
-
-  hidden_layers : [64,64]
-
-  epsilon_cfg:
-    init_value : 0.5
-    end_value : 0.001
-    transition_steps : 10_000
-    power : 1.0
+  grad_steps_per_step : 1
+  agent : 
+    _target_: agents.DoubleQAgent
+    target_period : 50
+    discount : 0.99
+    learning_rate : 0.002
+    hidden_layers : [64,64]
+    epsilon_cfg:
+      init_value : 0.5
+      end_value : 0.001
+      transition_steps : 10_000
+      power : 1.0
 
 log:
-  wandb_mode : disabled
-  wandb_group : DDQN_GYM_4
-
-
+  logger : 
+    _target_ : agents.DoubleQLogger
+    mode : online
+    group : DDQN_GYM_4

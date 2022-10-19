@@ -1,16 +1,15 @@
 import jax.numpy as jnp
 
 
-def eval_rollouts(env, agent, actor_state, params, rng):
+def eval_rollouts(env, agent, agent_state, rng):
     observation, info = env.reset()
     crewards = jnp.zeros(env.num_envs)
     rollout_finished = jnp.zeros(env.num_envs, dtype=bool)
     all_done = False
     while not all_done:
-        actor_output, actor_state = agent.actor_step(
-            params=params,
+        agent_state, actor_output = agent.actor_step(
+            agent_state=agent_state,
             obs=observation,
-            actor_state=actor_state,
             key=next(rng),
             evaluation=True,
         )

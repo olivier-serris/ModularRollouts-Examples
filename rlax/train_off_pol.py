@@ -1,39 +1,42 @@
-from codetiming import Timer
 import os
+from codetiming import Timer
 import jax
-
-import haiku as hk
 import jax.numpy as jnp
+import chex
+import haiku as hk
 from observable import Observable
 from omegaconf import OmegaConf
-from brax.training.replay_buffers import UniformSamplingQueue
 import hydra
-from ddqn.ddqn import DoubleQAgent
-from ddqn.ddqn_logger import ddqn_logger
-from evaluation import eval_rollouts
+from brax.training.replay_buffers import UniformSamplingQueue
 from modular_rollouts import create_env
-import chex
+from evaluation import eval_rollouts
+from agents.agent import AgentOffPolicy
+
+# TODO : general reorganisation :
+# => More efficent main train function for pure jax ?
+# => If the replay buffer is moved inside the agent, it simplifies the genericity of the main loop
+# add a collect n step module ?
 
 
 @hydra.main(config_path=f"{os.getcwd()}/configs/", config_name="ddqn_gym.yaml")
-def train(cfg):
+def train(hydra_config):
     ################ INIT ################
-    cfg = OmegaConf.to_container(cfg, resolve=True)
-    agent_cfg = cfg["train"]
+    cfg = OmegaConf.to_container(hydra_config, resolve=True)
+
     seed = cfg["seed"]
+    num_envs = cfg["env"]["num_envs"]
+    num_evals = cfg["env"]["num_eval"]
+    eval_every = cfg["env"]["eval_every"]
+    agent_cfg = cfg["train"]
     total_train_step = agent_cfg["total_train_step"]
     start_training_after_x_steps = agent_cfg["start_training_after_x_steps"]
     max_replay_size = agent_cfg["max_replay_size"]
     batch_size = agent_cfg["batch_size"]
-    num_envs = cfg["env"]["num_envs"]
-    num_evals = cfg["env"]["num_eval"]
-    target_period = agent_cfg["target_period"]
-    discount = agent_cfg["discount"]
-    eval_every = cfg["env"]["eval_every"]
+    grad_steps_per_step = agent_cfg["grad_steps_per_step"]
 
-    event = Observable()
-    logger = ddqn_logger(cfg)
-    logger.register(event)
+    rng = hk.PRNGSequence(jax.random.PRNGKey(seed))
+
+    # init env :
     env, eval_env = create_env(
         env_engine=cfg["env"]["env_engine"],
         env_name=cfg["env"]["name"],
@@ -44,23 +47,21 @@ def train(cfg):
         seed=seed,
     )
     observation, info = env.reset(seed=seed)
-    agent = DoubleQAgent(
-        env.single_action_space.n,
-        discount=discount,
-        hidden_layers=agent_cfg["hidden_layers"],
-        learning_rate=agent_cfg["learning_rate"],
-        target_period=target_period,
-        epsilon_cfg=dict(
-            init_value=1,
-            end_value=0.01,
-            transition_steps=1000,
-            power=1.0,
-        ),
+
+    # init agent :
+    agent: AgentOffPolicy = hydra.utils.instantiate(
+        cfg["train"]["agent"], action_space=env.single_action_space
     )
-    rng = hk.PRNGSequence(jax.random.PRNGKey(seed))
-    params = agent.initial_params(dummy_obs=observation, key=next(rng))
-    learner_state = agent.initial_learner_state(params)
-    actor_state = agent.initial_actor_state()
+    agent_state = agent.initialize(dummy_obs=observation, key=next(rng))
+
+    # init logger :
+    event = Observable()
+    logger = hydra.utils.instantiate(
+        cfg["log"]["logger"], _recursive_=False, wandb_cfg=cfg
+    )
+    logger.register(event)
+
+    # init replay buffer :
     action_shape = (
         1 if env.single_action_space.shape == () else env.single_action_space.shape
     )
@@ -71,7 +72,6 @@ def train(cfg):
         jnp.zeros(env.single_observation_space.shape),  # obs_t
         jnp.zeros(1),  # terminated_t
     )
-
     replaybuffer = UniformSamplingQueue(
         max_replay_size=max_replay_size,
         dummy_data_sample=dummy_step,
@@ -89,24 +89,29 @@ def train(cfg):
     while n_step_done <= total_train_step:
         with Timer(name="action_selection", logger=None):
             if n_step_done < start_training_after_x_steps:
-                actions = jax.random.uniform(next(rng), env.single_action_space.shape)
+                actions = jax.random.choice(
+                    next(rng),
+                    jnp.arange(env.single_action_space.n),
+                    shape=env.action_space.shape,
+                )
+                actor_output = {}
             else:
-                actor_output, actor_state = agent.actor_step(
-                    params=params,
+                agent_state, actor_output = agent.actor_step(
+                    agent_state=agent_state,
                     obs=observation,
-                    actor_state=actor_state,
                     key=next(rng),
                     evaluation=False,
                 )
                 actions = actor_output.actions
+                actor_output = actor_output._asdict()
         event.trigger(
             "action_selection",
             step=n_step_done,
-            action=actions,
-            **actor_state._asdict(),
+            **actor_output,
         )
         with Timer("env_step", logger=None):
             env_output = env.step(actions)
+
         with Timer("replaybuffer_insert", logger=None):
             observation, reward, terminated, truncated, info = env_output
             done = jnp.logical_or(terminated, truncated)
@@ -120,20 +125,21 @@ def train(cfg):
         ):
             with Timer("learn_step", logger=None):
                 # training :
-                buffer_state, buffer_sample = replaybuffer.sample(buffer_state)
-                params, learner_state = agent.learner_step(
-                    params, learner_state=learner_state, buffer_sample=buffer_sample
-                )
-            event.trigger("on_learn_step", step=n_step_done, **learner_state._asdict())
+                # TODO : optimize this, sample every sample in one go and then scan
+                for _ in range(grad_steps_per_step):
+                    buffer_state, buffer_sample = replaybuffer.sample(buffer_state)
+                    agent_state, learner_output = agent.learner_step(
+                        agent_state, buffer_sample
+                    )
+            event.trigger("on_learn_step", step=n_step_done, **learner_output._asdict())
 
         with Timer("evaluation", logger=None):
             if n_step_done % eval_every == 0:
-                crewards = eval_rollouts(eval_env, agent, actor_state, params, rng)
+                crewards = eval_rollouts(eval_env, agent, agent_state, rng)
         event.trigger(
             "on_evaluation",
             step=n_step_done,
             crewards=crewards,
-            **learner_state._asdict(),
         )
         last_obs = observation
         last_done = done
