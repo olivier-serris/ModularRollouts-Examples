@@ -25,6 +25,6 @@ class AgentOffPolicy(ABC):
 
     @abstractmethod
     def learner_step(
-        self, agent_state: AgentState, buffer_sample
+        self, agent_state: AgentState, buffer_sample, key
     ) -> Tuple[AgentState, LearnerOutput]:
         pass

@@ -51,8 +51,8 @@ class DoubleQAgent:
         self.actor_step = jax.jit(self.actor_step)
         self.learner_step = jax.jit(self.learner_step)
 
-    def initialize(self, dummy_obs, key):
-        online_params = self._network.init(key, dummy_obs)
+    def initialize(self, dummy_obs, rng):
+        online_params = self._network.init(next(rng), dummy_obs)
         params = Params(online_params, online_params)
 
         actor_count = jnp.zeros((), dtype=jnp.float32)
@@ -98,7 +98,7 @@ class DoubleQAgent:
         td_error = batched_loss(q_tm1, a_tm1, r_t, discount_t, q_t_val, q_t_select)
         return jnp.mean(rlax.l2_loss(td_error))
 
-    def learner_step(self, agent_state: AgentState, buffer_sample):
+    def learner_step(self, agent_state: AgentState, buffer_sample, key):
         (last_obs, actions, reward, observation, terminated) = buffer_sample
         params, learner_state = agent_state.params, agent_state.learner_state
         # Update parameters every _target_period steps.

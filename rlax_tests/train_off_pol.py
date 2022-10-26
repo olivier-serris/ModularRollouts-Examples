@@ -1,4 +1,4 @@
-import os
+import os, sys
 from codetiming import Timer
 import jax
 import jax.numpy as jnp
@@ -11,14 +11,18 @@ from brax.training.replay_buffers import UniformSamplingQueue
 from modular_rollouts import create_env
 from evaluation import eval_rollouts
 from agents.agent import AgentOffPolicy
+import gym.spaces as spaces
+from utils import check_env, get_uniform_action_sample_fct
 
 # TODO : general reorganisation :
 # => More efficent main train function for pure jax ?
 # => If the replay buffer is moved inside the agent, it simplifies the genericity of the main loop
 # add a collect n step module ?
 
+# TODO : how to handle random keys in a clean way.
 
-@hydra.main(config_path=f"{os.getcwd()}/configs/", config_name="ddqn_gym.yaml")
+# sac_gym.yaml  ddqn_gym.yaml
+@hydra.main(config_path=f"{os.getcwd()}/configs/", config_name="sac_gym.yaml")
 def train(hydra_config):
     ################ INIT ################
     cfg = OmegaConf.to_container(hydra_config, resolve=True)
@@ -40,19 +44,21 @@ def train(hydra_config):
     env, eval_env = create_env(
         env_engine=cfg["env"]["env_engine"],
         env_name=cfg["env"]["name"],
+        max_step=cfg["env"]["episode_max_length"],
         n_eval_env=num_evals,
         n_train_env=num_envs,
         action_type=chex.Array,
         n_pop=1,
         seed=seed,
     )
-    observation, info = env.reset(seed=seed)
+    # check_env(env)
+    first_obs, info = env.reset(seed=seed)
 
     # init agent :
     agent: AgentOffPolicy = hydra.utils.instantiate(
         cfg["train"]["agent"], action_space=env.single_action_space
     )
-    agent_state = agent.initialize(dummy_obs=observation, key=next(rng))
+    agent_state = agent.initialize(dummy_obs=first_obs, rng=rng)
 
     # init logger :
     event = Observable()
@@ -78,34 +84,34 @@ def train(hydra_config):
         sample_batch_size=batch_size,
     )
     buffer_state = replaybuffer.init(next(rng))
+
+    uniform_action = get_uniform_action_sample_fct(
+        env.single_action_space, env.action_space
+    )
     replaybuffer.sample = jax.jit(replaybuffer.sample)
     replaybuffer.insert = jax.jit(replaybuffer.insert)
 
     ################ TRAIN ################
 
     n_step_done = 0
-    last_obs = jnp.array(observation)
-    last_done = jnp.zeros(env.num_envs, dtype=bool)
+    obs = jnp.array(first_obs)
     while n_step_done <= total_train_step:
         with Timer(name="action_selection", logger=None):
             if n_step_done < start_training_after_x_steps:
-                actions = jax.random.choice(
-                    next(rng),
-                    jnp.arange(env.single_action_space.n),
-                    shape=env.action_space.shape,
-                )
-                actor_output = {}
+                actions = uniform_action(next(rng))
+                actor_output = {"actions": actions}
             else:
                 agent_state, actor_output = agent.actor_step(
                     agent_state=agent_state,
-                    obs=observation,
+                    obs=obs,
                     key=next(rng),
                     evaluation=False,
                 )
                 actions = actor_output.actions
                 actor_output = actor_output._asdict()
+            assert jnp.logical_and(-1 <= actions, actions <= 1).all()
         event.trigger(
-            "action_selection",
+            "on_action_selection",
             step=n_step_done,
             **actor_output,
         )
@@ -113,43 +119,42 @@ def train(hydra_config):
             env_output = env.step(actions)
 
         with Timer("replaybuffer_insert", logger=None):
-            observation, reward, terminated, truncated, info = env_output
-            done = jnp.logical_or(terminated, truncated)
-            step_data = (last_obs, actions, reward, observation, terminated)
-            # remove wrong steps (terminal -> start)
-            step_data = jax.tree_util.tree_map(lambda x: x[~last_done], step_data)
+            new_obs, reward, terminated, truncated, info = env_output
+            step_data = (obs, actions, reward, new_obs, terminated)
             buffer_state = replaybuffer.insert(buffer_state, step_data)
+
         if (
             n_step_done > start_training_after_x_steps
-            and replaybuffer.size(buffer_state) > start_training_after_x_steps
+            and replaybuffer.size(buffer_state) > batch_size
         ):
             with Timer("learn_step", logger=None):
-                # training :
                 # TODO : optimize this, sample every sample in one go and then scan
-                for _ in range(grad_steps_per_step):
+                # with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+                for _ in range(grad_steps_per_step * num_envs):
                     buffer_state, buffer_sample = replaybuffer.sample(buffer_state)
                     agent_state, learner_output = agent.learner_step(
-                        agent_state, buffer_sample
+                        agent_state, buffer_sample, next(rng)
                     )
             event.trigger("on_learn_step", step=n_step_done, **learner_output._asdict())
 
         with Timer("evaluation", logger=None):
             if n_step_done % eval_every == 0:
                 crewards = eval_rollouts(eval_env, agent, agent_state, rng)
-        event.trigger(
-            "on_evaluation",
-            step=n_step_done,
-            crewards=crewards,
-        )
-        last_obs = observation
-        last_done = done
+                event.trigger(
+                    "on_evaluation",
+                    step=n_step_done,
+                    crewards=crewards,
+                )
+        obs = new_obs
         n_step_done += env.num_envs
 
-    env.close()
     total = sum(Timer.timers.total(name) for name in Timer.timers.data)
     print("total timers : ", total)
 
 
 if __name__ == "__main__":
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    # to remove once package created :
+    sys.path.append(os.getcwd())
+
     train()

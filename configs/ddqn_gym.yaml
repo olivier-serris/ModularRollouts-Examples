@@ -30,4 +30,4 @@ log:
   logger : 
     _target_ : agents.DoubleQLogger
     mode : online
-    group : DDQN_GYM_4
+    group : DDQN_GYM
