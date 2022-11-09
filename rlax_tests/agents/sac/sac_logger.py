@@ -22,17 +22,23 @@ class SACLogger(WandbLogger):
         if len(actions):
             wandb.log({"learn/mean_action": actions.mean()}, step=step)
 
-    def on_learn_step(self, step, q_losses, actor_loss, q_grads, actor_grads, **kwargs):
-        flattened_grads, _ = ravel_pytree(q_grads)
-        critic_grad_norm = jax.numpy.linalg.norm(flattened_grads)
-        flattened_grads, _ = ravel_pytree(actor_grads)
-        actor_grad_norm = jax.numpy.linalg.norm(flattened_grads)
+    def on_learn_step(
+        self,
+        step,
+        q_losses,
+        actor_loss,
+        q_grad_norms,
+        actor_grad_norms,
+        entropy_coeff,
+        **kwargs
+    ):
         wandb.log(
             {
                 "learn/q_loss": q_losses.mean(),
-                "learn/q_grad": critic_grad_norm,
-                "learn/actor_loss": actor_loss,
-                "learn/actor_grad": actor_grad_norm,
+                "learn/q_grad": q_grad_norms.mean(),
+                "learn/actor_loss": actor_loss.mean(),
+                "learn/actor_grad": actor_grad_norms.mean(),
+                "learn/entropy_coeff": entropy_coeff.mean(),
             },
             step=step,
         )

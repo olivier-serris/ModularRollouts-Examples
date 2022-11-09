@@ -2,6 +2,8 @@ from gym import spaces
 import jax
 import jax.numpy as jnp
 import collections
+from brax.training.replay_buffers import UniformSamplingQueue
+from jax.flatten_util import ravel_pytree
 
 
 def get_uniform_action_sample_fct(single_actions_pace, action_space):
@@ -40,3 +42,14 @@ def flatten_dict(d, parent_key="", sep="_"):
         else:
             items.append((new_key, v))
     return dict(items)
+
+
+def grad_norm(grad):
+    flattened_grads, _ = ravel_pytree(grad)
+    return jax.numpy.linalg.norm(flattened_grads)
+
+
+class ReplayBuffer(UniformSamplingQueue):
+    def sample_with_key(self, buffer_state, key):
+        _, sample = self.sample(buffer_state.replace(key=key))
+        return sample

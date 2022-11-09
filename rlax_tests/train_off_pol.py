@@ -7,21 +7,16 @@ import haiku as hk
 from observable import Observable
 from omegaconf import OmegaConf
 import hydra
-from brax.training.replay_buffers import UniformSamplingQueue
 from modular_rollouts import create_env
 from evaluation import eval_rollouts
 from agents.agent import AgentOffPolicy
-import gym.spaces as spaces
-from utils import check_env, get_uniform_action_sample_fct
+from utils import check_env, get_uniform_action_sample_fct, ReplayBuffer
 
 # TODO : general reorganisation :
 # => More efficent main train function for pure jax ?
 # => If the replay buffer is moved inside the agent, it simplifies the genericity of the main loop
-# add a collect n step module ?
 
-# TODO : how to handle random keys in a clean way.
 
-# sac_gym.yaml  ddqn_gym.yaml
 @hydra.main(config_path=f"{os.getcwd()}/configs/", config_name="sac_gym.yaml")
 def train(hydra_config):
     ################ INIT ################
@@ -58,7 +53,7 @@ def train(hydra_config):
     agent: AgentOffPolicy = hydra.utils.instantiate(
         cfg["train"]["agent"], action_space=env.single_action_space
     )
-    agent_state = agent.initialize(dummy_obs=first_obs, rng=rng)
+    agent_state = agent.initialize(dummy_obs=first_obs, key=next(rng))
 
     # init logger :
     event = Observable()
@@ -78,7 +73,7 @@ def train(hydra_config):
         jnp.zeros(env.single_observation_space.shape),  # obs_t
         jnp.zeros(1),  # terminated_t
     )
-    replaybuffer = UniformSamplingQueue(
+    replaybuffer = ReplayBuffer(
         max_replay_size=max_replay_size,
         dummy_data_sample=dummy_step,
         sample_batch_size=batch_size,
@@ -90,12 +85,19 @@ def train(hydra_config):
     )
     replaybuffer.sample = jax.jit(replaybuffer.sample)
     replaybuffer.insert = jax.jit(replaybuffer.insert)
+    replaybuffer.vmap_sample = jax.jit(
+        jax.vmap(replaybuffer.sample_with_key, in_axes=(None, 0))
+    )
 
     ################ TRAIN ################
 
     n_step_done = 0
     obs = jnp.array(first_obs)
     while n_step_done <= total_train_step:
+        # with jax.profiler.trace(
+        #     "/tmp/jax-trace",
+        #     create_perfetto_link=n_step_done > start_training_after_x_steps,
+        # ):
         with Timer(name="action_selection", logger=None):
             if n_step_done < start_training_after_x_steps:
                 actions = uniform_action(next(rng))
@@ -110,6 +112,7 @@ def train(hydra_config):
                 actions = actor_output.actions
                 actor_output = actor_output._asdict()
             assert jnp.logical_and(-1 <= actions, actions <= 1).all()
+            actions.block_until_ready()
         event.trigger(
             "on_action_selection",
             step=n_step_done,
@@ -117,34 +120,45 @@ def train(hydra_config):
         )
         with Timer("env_step", logger=None):
             env_output = env.step(actions)
+            env_output[0].block_until_ready()
 
         with Timer("replaybuffer_insert", logger=None):
             new_obs, reward, terminated, truncated, info = env_output
             step_data = (obs, actions, reward, new_obs, terminated)
             buffer_state = replaybuffer.insert(buffer_state, step_data)
+            buffer_state.data.block_until_ready()
 
         if (
             n_step_done > start_training_after_x_steps
             and replaybuffer.size(buffer_state) > batch_size
         ):
             with Timer("learn_step", logger=None):
-                # TODO : optimize this, sample every sample in one go and then scan
-                # with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
-                for _ in range(grad_steps_per_step * num_envs):
-                    buffer_state, buffer_sample = replaybuffer.sample(buffer_state)
-                    agent_state, learner_output = agent.learner_step(
+                if cfg["train"].get("with_scan", False):
+                    keys = jax.random.split(next(rng), grad_steps_per_step * num_envs)
+                    buffer_sample = replaybuffer.vmap_sample(buffer_state, keys)
+                    agent_state, learner_output = agent.learn_n_step(
                         agent_state, buffer_sample, next(rng)
                     )
+                else:
+                    for _ in range(grad_steps_per_step * num_envs):
+                        buffer_state, buffer_sample = replaybuffer.sample(buffer_state)
+                        agent_state, learner_output = agent.learner_step(
+                            agent_state, buffer_sample, next(rng)
+                        )
+                learner_output[0].block_until_ready()
+
             event.trigger("on_learn_step", step=n_step_done, **learner_output._asdict())
 
-        with Timer("evaluation", logger=None):
-            if n_step_done % eval_every == 0:
+        if n_step_done % eval_every == 0:
+            with Timer("evaluation", logger=None):
                 crewards = eval_rollouts(eval_env, agent, agent_state, rng)
-                event.trigger(
-                    "on_evaluation",
-                    step=n_step_done,
-                    crewards=crewards,
-                )
+                crewards.block_until_ready()
+            event.trigger(
+                "on_evaluation",
+                step=n_step_done,
+                crewards=crewards,
+                eval_every=eval_every,
+            )
         obs = new_obs
         n_step_done += env.num_envs
 
@@ -153,7 +167,10 @@ def train(hydra_config):
 
 
 if __name__ == "__main__":
+    from jax.config import config
+
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    # config.update("jax_debug_nans", True)
     # to remove once package created :
     sys.path.append(os.getcwd())
 

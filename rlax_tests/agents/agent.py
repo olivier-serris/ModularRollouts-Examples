@@ -28,3 +28,9 @@ class AgentOffPolicy(ABC):
         self, agent_state: AgentState, buffer_sample, key
     ) -> Tuple[AgentState, LearnerOutput]:
         pass
+
+    @abstractmethod
+    def learner_n_step(
+        self, agent_state: AgentState, buffer_samples, key
+    ) -> Tuple[AgentState, LearnerOutput]:
+        pass
