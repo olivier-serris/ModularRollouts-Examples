@@ -1,10 +1,10 @@
 seed : 1
 
 env : 
-  num_envs : 10
+  num_envs : 50
   num_eval : 1
-  env_engine : 'gym'  # gym  brax
-  name : InvertedPendulum-v4  # InvertedPendulum HalfCheetah-v4 inverted_pendulum halfcheetah
+  env_engine : 'brax'  # gym  brax
+  name : walker2d  # InvertedPendulum HalfCheetah-v4 inverted_pendulum halfcheetah
   eval_every : 5000
   episode_max_length : 1000
   
