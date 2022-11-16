@@ -157,9 +157,8 @@ class SAC:
         self.squashed_gaussian = multivariate_gaussian()
         self.critic_polyak_update_val = critic_polyak_update_val
         self.n_critics = n_critics
-        self._update_q_target_every = (
-            update_q_target_every  # TODO : Not implemented yet.
-        )
+        assert update_q_target_every == 1, "not implemented"
+        self._update_q_target_every =update_q_target_every 
 
         self.entropy_net = build_entropy_net(entropy_coeff)
         if target_entropy == "auto":
