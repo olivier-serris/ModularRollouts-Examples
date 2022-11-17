@@ -65,10 +65,10 @@ def build_actor_continuous(hidden_layers: List, n_outputs: int) -> hk.Transforme
 
 def build_entropy_net(init_val):
     def forward():
-        return hk.get_parameter(
-            "entropy_coeff", [], init=hk.initializers.Constant(init_val)
+        log_coeff = hk.get_parameter(
+            "entropy_coeff", [], init=hk.initializers.Constant(jnp.log(init_val))
         )
-
+        return jnp.exp(log_coeff)
     return hk.without_apply_rng(hk.transform(forward))
 
 
@@ -186,6 +186,7 @@ class SAC:
         q_params = jax.vmap(self._q_net.init, in_axes=(0, None, None))(
             keys, dummy_obs, dummy_act
         )
+        # TODO : i have multiple critic optimizers, i should be able to have only one.
         q_opt_states = jax.vmap(self._critic_optimizer.init, in_axes=(0))(q_params)
 
         # creates iterate-over-critics batched functions :
