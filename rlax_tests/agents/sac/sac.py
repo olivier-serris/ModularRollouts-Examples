@@ -46,11 +46,15 @@ def build_actor_continuous(hidden_layers: List, n_outputs: int) -> hk.Transforme
     """Factory for a simple MLP actor with squashed gaussian for continuous actions."""
 
     def pi(obs):
-        trunc = hk.Sequential([hk.Flatten(), nets.MLP([*hidden_layers])])
+        trunc = hk.Sequential(
+            [hk.Flatten(), nets.MLP([*hidden_layers], activate_final=True)]
+        )
         mu_layer = hk.Linear(n_outputs)
         std_layer = hk.Linear(n_outputs)
         latent = trunc(obs)
         mu, std = mu_layer(latent), std_layer(latent)
+        # some implementations apply a tanh to mu.
+        squashed_mu = jnp.tanh(mu)
 
         # We need constraint to force the std to be positive.
         # softplus, the continuous version of relu have nice properties to enforce positivity.
@@ -58,7 +62,7 @@ def build_actor_continuous(hidden_layers: List, n_outputs: int) -> hk.Transforme
         # discussion : https://github.com/tensorflow/probability/issues/751
         positive_std = jax.nn.softplus(std) + 1e-5
 
-        return mu, positive_std
+        return squashed_mu, positive_std
 
     return hk.without_apply_rng(hk.transform(pi))
 
@@ -69,6 +73,7 @@ def build_entropy_net(init_val):
             "entropy_coeff", [], init=hk.initializers.Constant(jnp.log(init_val))
         )
         return jnp.exp(log_coeff)
+
     return hk.without_apply_rng(hk.transform(forward))
 
 
@@ -151,14 +156,16 @@ class SAC:
         self._critic_optimizer = optax.chain(
             optax.adam(critic_learning_rate), optax.clip_by_global_norm(max_grad_norm)
         )
-        self._entropy_optimizer = optax.adam(entropy_learning_rate)
+        self._entropy_optimizer = optax.chain(
+            optax.adam(entropy_learning_rate), optax.clip_by_global_norm(max_grad_norm)
+        )
 
         self._discount = discount
         self.squashed_gaussian = multivariate_gaussian()
         self.critic_polyak_update_val = critic_polyak_update_val
         self.n_critics = n_critics
         assert update_q_target_every == 1, "not implemented"
-        self._update_q_target_every =update_q_target_every 
+        self._update_q_target_every = update_q_target_every
 
         self.entropy_net = build_entropy_net(entropy_coeff)
         if target_entropy == "auto":
