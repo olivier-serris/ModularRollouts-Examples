@@ -54,7 +54,6 @@ def build_actor_continuous(hidden_layers: List, n_outputs: int) -> hk.Transforme
         latent = trunc(obs)
         mu, std = mu_layer(latent), std_layer(latent)
         # some implementations apply a tanh to mu.
-        squashed_mu = jnp.tanh(mu)
 
         # We need constraint to force the std to be positive.
         # softplus, the continuous version of relu have nice properties to enforce positivity.
@@ -62,7 +61,7 @@ def build_actor_continuous(hidden_layers: List, n_outputs: int) -> hk.Transforme
         # discussion : https://github.com/tensorflow/probability/issues/751
         positive_std = jax.nn.softplus(std) + 1e-5
 
-        return squashed_mu, positive_std
+        return mu, positive_std
 
     return hk.without_apply_rng(hk.transform(pi))
 

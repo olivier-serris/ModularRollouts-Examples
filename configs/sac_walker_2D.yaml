@@ -1,4 +1,4 @@
-seed : 1
+seed : 10
 
 env : 
   num_envs : 50
@@ -12,20 +12,20 @@ env :
 train :
   start_training_after_x_steps :  10_000
   total_train_step : 1_000_000
-  max_replay_size : 200_000
+  max_replay_size : 50_000
   batch_size : 256
   grad_steps_per_step : 1
   with_scan : True
   agent : 
     _target_: agents.SAC
-    critic_polyak_update_val : 0.05
+    critic_polyak_update_val : 5e-3
     update_q_target_every : 1
     discount : 0.99
-    critic_learning_rate : 0.003
-    actor_learning_rate : 0.003
+    critic_learning_rate : 3e-4
+    actor_learning_rate : 3e-4
     target_entropy : 'auto'
     entropy_coeff :  1
-    entropy_learning_rate : 0.003 # set to 0 to deactivate entropy coefficient learning. 
+    entropy_learning_rate : 3e-4 # set to 0 to deactivate entropy coefficient learning. 
     max_grad_norm : 0.5
     critic_network : 
       hidden_layers : [256,256]

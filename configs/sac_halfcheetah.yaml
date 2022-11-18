@@ -1,10 +1,10 @@
-seed : 10
+seed : 6
 
 env : 
   num_envs : 100
   num_eval : 10
-  env_engine : 'gym'  # gym  brax
-  name : HalfCheetah-v4  # InvertedPendulum HalfCheetah-v4 inverted_pendulum halfcheetah
+  env_engine : brax  # gym  brax
+  name : halfcheetah  # InvertedPendulum HalfCheetah-v4 inverted_pendulum halfcheetah
   eval_every : 5000
   episode_max_length : 1000
   
@@ -12,7 +12,7 @@ env :
 train :
   start_training_after_x_steps :  10_000
   total_train_step : 1_000_000
-  max_replay_size : 50_000
+  max_replay_size : 100_000
   batch_size : 64
   grad_steps_per_step : 1
   with_scan : True
@@ -24,7 +24,7 @@ train :
     critic_learning_rate : 3e-4
     actor_learning_rate : 3e-4
     target_entropy : 'auto'
-    entropy_coeff :  1
+    entropy_coeff : 1 # 1
     entropy_learning_rate : 3e-4 # set to 0 to deactivate entropy coefficient learning. 
     max_grad_norm : 0.5
     critic_network : 
@@ -35,5 +35,5 @@ train :
 log:
   logger : 
     _target_ : agents.SACLogger
-    mode : online
+    mode : disabled
     group : SAC
